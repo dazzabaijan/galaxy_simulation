@@ -1,5 +1,4 @@
 from numpy.lib.utils import source
-from galaxy_simulation.MPI_3_2 import FROM_MASTER, FROM_WORKER, N
 from mpi4py import MPI
 from dataclasses import dataclass
 from tqdm import tqdm
@@ -13,6 +12,9 @@ size = comm.Get_size()
 rank = comm.Get_rank()
 name = MPI.Get_processor_name()
 MASTER = 0
+FROM_MASTER = 1
+FROM_WORKER = 2
+
 
 class Galaxy:
     
@@ -26,6 +28,7 @@ class Galaxy:
         
         Arg:
             n: Number of n-bodies
+            timesteps: Timesteps of the simulation
         """
         self.n = n
         self.timesteps = timesteps
@@ -82,7 +85,8 @@ class Galaxy:
         return 1 if np.random.rand() < 0.5 else 1
     
     def _run_master(self, pos, vel, masses, n, h):
-        pos, vel = 
+        # pos, vel = 
+        pass
     
     def _MPI_A(self, h, pos, vel, masses, n):
         NCA, NCB = 3, 3
@@ -120,8 +124,8 @@ class Galaxy:
     
     def _run_worker(self, pos, vel, masses, n, h):
         NCA = 3
-        P = np.zeros((N, NCA))
-        V = np.zeros((N, NCA))
+        P = np.zeros((self.n, NCA))
+        V = np.zeros((self.n, NCA))
         
         masses = np.zeros(self.n)
         pos = np.zeros((self.n, 3))
@@ -129,7 +133,7 @@ class Galaxy:
         
         offset = comm.recv(source=MASTER, tag=FROM_MASTER)
         rows = comm.recv(source=MASTER, tag=FROM_MASTER)
-        comm.Recv([pos, N*NCA, MPI.DOUBLE], source=MASTER)
+        comm.Recv([pos, self.n*NCA, MPI.DOUBLE], source=MASTER)
         
         
 if __name__ == "__main__":
