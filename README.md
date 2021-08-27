@@ -1,1 +1,1 @@
-# galaxy_simulation
+# Galaxy simulation
