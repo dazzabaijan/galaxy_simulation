@@ -1,3 +1,3 @@
-# Galaxy simulation
+# N-bodies Galaxy Simulation
 
-A HPC physics simulation of a spiral galaxy with n-bodies using the fourth order Runge-Kutte method. It will be written in numpy also accelerated by mpi4py(and maybe Numba?).
+A HPC n-bodies physics simulation of a spiral galaxy using the fourth order Runge-Kutte method. Written in numpy and accelerated by mpi4py for multicore processing and Numba's Just-in-Time compiler.
