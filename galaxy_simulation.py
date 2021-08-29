@@ -203,12 +203,7 @@ class Galaxy:
         return 1 if np.random.rand() < 0.5 else -1
     
     def _run_master(self, pos, vel, masses, N, h):
-        # print("Running master....")
-        pos, vel = self._MPI_A(h, pos, vel, masses, N)
-        # print("Finish running master...")
-        return pos, vel
-    
-    def _MPI_A(self, h, pos, vel, masses, N):
+        
         NCA, NCB = 3, 3
         
         P, V = np.zeros((N, NCA)), np.zeros((N, NCA))
