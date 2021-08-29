@@ -15,7 +15,7 @@ name = MPI.Get_processor_name()
 MASTER = 0
 FROM_MASTER = 1
 FROM_WORKER = 2
-
+G: int = 6.7e-11
 
 @numba.njit()
 def runge_kutta(pos, vel, masses, n, N, h, r):
@@ -71,43 +71,43 @@ def accelerate(k, j, n, pos, masses, N, h, fx, fy, fz, S):
 @numba.njit()
 def f2(x1, y1, z1, x2, y2, z2, mass, K, S):
 
-    # dx = x1 - x2
-    # dy = y1 - y2
-    # dz = z1 - z2
-    # R = (dx**2 + dy**2 + dz**2 + S)**1.5
-    # delta = np.array([dx, dy, dz])
-    R = ((x1-x2)**2 + (y1-y2)**2 + (z1-z2)**2 + S )**(1.5)
-    ks1 = 0
-    ks2 = 0
-    s = 0
-    if R == 0:
-            K = np.zeros(3)
-    else:
-        for s in range(0,3):
-            if s == 0:
-                ks1 = x1
-                ks2 = x2
-            if s == 1:
-                ks1 = y1
-                ks2 = y2
-            if s == 2:
-                ks1 = z1
-                ks2 = z2
+    # R = ((x1-x2)**2 + (y1-y2)**2 + (z1-z2)**2 + S )**(1.5)
+    # ks1 = 0
+    # ks2 = 0
+    # s = 0
+    # if R == 0:
+    #         K = np.zeros(3)
+    # else:
+    #     for s in range(0,3):
+    #         if s == 0:
+    #             ks1 = x1
+    #             ks2 = x2
+    #         if s == 1:
+    #             ks1 = y1
+    #             ks2 = y2
+    #         if s == 2:
+    #             ks1 = z1
+    #             ks2 = z2
         
-            K[s] =  -6.7e-11*mass*(ks1- ks2)/R
+    #         K[s] =  -6.7e-11*mass*(ks1- ks2)/R
+
+    dx = x1 - x2
+    dy = y1 - y2
+    dz = z1 - z2
+    R = (dx**2 + dy**2 + dz**2 + S)**1.5
+    delta = np.array([dx, dy, dz])
 
     # if R == 0:
     #     K = np.zeros(3)
     # else:
-    #     K = -Galaxy.G*mass*delta/R
+    #     K = -G*mass*delta/R
 
-    # K = np.zeros(3) if R == 0 else -Galaxy.G*mass*delta/R
+    K = np.zeros(3) if R == 0 else -G*mass*delta/R
     
     return K
 
 class Galaxy:
     
-    G: float = 6.7*1e-11
     M: int = 2e29
     r: int = 1e11
     h: int = 2e3
@@ -136,8 +136,8 @@ class Galaxy:
             pos[:, 0] = np.random.exponential(Galaxy.r, self.n)
             pos[:, 1] = np.random.exponential(Galaxy.r, self.n)
             pos[:, 2] = np.random.exponential(Galaxy.r, self.n)
-            
-            escape_vel = np.sqrt((Galaxy.G*(np.sum(masses)+M1))/(Galaxy.r*np.sqrt(3)))
+
+            escape_vel = np.sqrt((G*(np.sum(masses)+M1))/(Galaxy.r*np.sqrt(3)))
             print(f"Escape Velocity: {escape_vel}")
             vel = escape_vel*np.random.rand(self.n, 3)
             
@@ -158,7 +158,7 @@ class Galaxy:
                     rp = np.sqrt(pos[j, 0]**2 + pos[j, 1]**2)
                     if rp < R:
                         mass += masses[j]
-                vp = np.sqrt(Galaxy.G*(mass + M1)/(np.sqrt(pos[i, 0]**2 + pos[i, 1]**2)))
+                vp = np.sqrt(G*(mass + M1)/(np.sqrt(pos[i, 0]**2 + pos[i, 1]**2)))
                 if pos[i, 1] > 0:
                     vel[i, 0], vel[i, 1] = vp*np.cos(theta), -vp*np.sin(theta)
                 else:
