@@ -39,12 +39,15 @@ class Galaxy:
         PM = np.zeros((self.n, 3, self.timesteps))
         
         if rank == MASTER:
+            print(f"{Galaxy.M=}, {Galaxy.r=}, {self.n=}")
             masses = Galaxy.M*np.random.rand(self.n)
             M1 = Galaxy.M*1e4
+            print(f"{M1}")
             pos = Galaxy.r*np.random.rand(self.n, 3)
+            # print(pos)
             pos[:, 0] = np.random.exponential(Galaxy.r, self.n)
             pos[:, 1] = np.random.exponential(Galaxy.r, self.n)
-            pos[:, 1] = np.random.exponential(Galaxy.r, self.n)
+            pos[:, 2] = np.random.exponential(Galaxy.r, self.n)
             
             escape_vel = np.sqrt((Galaxy.G*(np.sum(masses)+M1))/(Galaxy.r*np.sqrt(3)))
             print(f"Escape Velocity: {escape_vel}")
@@ -72,11 +75,24 @@ class Galaxy:
                     vel[i, 0], vel[i, 1] = vp*np.cos(theta), -vp*np.sin(theta)
                 else:
                     vel[i, 0], vel[i, 1] = -vp*np.cos(theta), vp*np.sin(theta)
-            
+
+            # print(pos)
             # position and velocity of the Sun
             pos[0, 0], pos[0, 1], pos[0, 2] = 0, 0, 0
             vel[0, 0], vel[0, 1], vel[0, 2], masses[0] = 0, 0, 0, M1
-        
+            fig = plt.figure()
+            ax = fig.add_subplot(111, projection='3d')
+            ax.scatter(pos[:, 0], pos[:, 1], pos[:, 2])
+            ax.set_xlabel('X Label')
+            ax.set_ylabel('Y Label')
+            ax.set_zlabel('Z Label')
+
+            plt.show()
+            plt.savefig("asd.png")
+            fig = plt.figure()
+            plt.scatter(pos[:, 0], pos[:, 1])
+            plt.show()
+            plt.savefig("asd2d.png")        
         else:
             pos, vel, masses = None, None, None
         
@@ -96,7 +112,7 @@ class Galaxy:
                 self._run_worker(pos, vel, masses, N, h)
                 
     def _rando(self):
-        return 1 if np.random.rand() < 0.5 else 1
+        return 1 if np.random.rand() < 0.5 else -1
     
     def _run_master(self, pos, vel, masses, N, h):
         # print("Running master....")
