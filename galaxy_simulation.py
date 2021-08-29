@@ -17,6 +17,94 @@ FROM_MASTER = 1
 FROM_WORKER = 2
 
 
+@numba.njit()
+def runge_kutta(pos, vel, masses, n, N, h, r):
+    """Fourth order Runge Kutta equations"""
+
+    j = 0
+    
+    k1v_a, k2v_a = np.zeros((N, 3)), np.zeros((N, 3))
+    k3v_a, k4v_a = np.zeros((N, 3)), np.zeros((N, 3))
+    pos_n, vel_n = np.zeros(3), np.zeros(3)
+    
+    # Gravity softening factor
+    S = r*0.58*N**-0.26
+    
+    k1x, k1y, k1z = vel[n, 0], vel[n, 1], vel[n, 2]        
+    k1v_a = accelerate(k1v_a, j, n, pos, masses, N, h, 0, 0, 0, S)
+    k1vx, k1vy, k1vz = np.sum(k1v_a[:, 0]), np.sum(k1v_a[:, 1]), np.sum(k1v_a[:, 2])
+    
+    k2x, k2y, k2z = vel[n, 0] + 0.5*h*k1vx, vel[n, 1] + 0.5*h*k1vy, vel[n, 2] + 0.5*h*k1vz
+    k2v_a = accelerate(k2v_a, j, n, pos, masses, N, h/2, k1vx, k1vy, k1vz, S)
+    k2vx, k2vy, k2vz = np.sum(k2v_a[:, 0]), np.sum(k2v_a[:, 1]), np.sum(k2v_a[:, 2])
+
+    k3x, k3y, k3z = vel[n, 0] + 0.5*h*k2vx, vel[n, 1] + 0.5*h*k2vy, vel[n, 2] + 0.5*h*k2vz
+    k3v_a = accelerate(k3v_a, j, n, pos, masses, N, h/2, k2vx, k2vy, k2vz, S)
+    k3vx, k3vy, k3vz = np.sum(k3v_a[:, 0]), np.sum(k3v_a[:, 1]), np.sum(k3v_a[:, 2])
+
+    k4x, k4y, k4z = vel[n, 0] + h*k3vx, vel[n, 1] + h*k3vy, vel[n, 2] + h*k3vz
+    k4v_a = accelerate(k4v_a, j, n, pos, masses, N, h, k3vx, k3vy, k3vz, S)
+    k4vx, k4vy, k4vz = np.sum(k4v_a[:, 0]), np.sum(k4v_a[:, 1]), np.sum(k4v_a[:, 2])
+    
+    vel_n[0] = (h/6)*(k1vx + 2*k2vx + 2*k3vx + k4vx) + vel[n, 0]
+    vel_n[1] = (h/6)*(k1vy + 2*k2vy + 2*k3vy + k4vy) + vel[n, 1]
+    vel_n[2] = (h/6)*(k1vz + 2*k2vz + 2*k3vz + k4vz) + vel[n, 2]
+    
+    pos_n[0] = (h/6)*(k1x + 2*k2x + 2*k3x + k4x) + pos[n, 0]
+    pos_n[1] = (h/6)*(k1y + 2*k2y + 2*k3y + k4y) + pos[n, 1]
+    pos_n[2] = (h/6)*(k1z + 2*k2z + 2*k3z + k4z) + pos[n, 2]
+
+    return pos_n, vel_n
+
+@numba.njit()
+def accelerate(k, j, n, pos, masses, N, h, fx, fy, fz, S):
+    x, y, z = pos[n, 0], pos[n, 1], pos[n, 2]
+    
+    for j in range(0, N):
+        if j == n:
+            k[j, :] = 0
+        else:
+            k[j, :] = f2(x, y, z, pos[j, 0]+h*fx, pos[j, 1]+h*fy, pos[j, 2]+h*fz, masses[j], k[j, :], S)
+
+    return k
+
+@numba.njit()
+def f2(x1, y1, z1, x2, y2, z2, mass, K, S):
+
+    # dx = x1 - x2
+    # dy = y1 - y2
+    # dz = z1 - z2
+    # R = (dx**2 + dy**2 + dz**2 + S)**1.5
+    # delta = np.array([dx, dy, dz])
+    R = ((x1-x2)**2 + (y1-y2)**2 + (z1-z2)**2 + S )**(1.5)
+    ks1 = 0
+    ks2 = 0
+    s = 0
+    if R == 0:
+            K = np.zeros(3)
+    else:
+        for s in range(0,3):
+            if s == 0:
+                ks1 = x1
+                ks2 = x2
+            if s == 1:
+                ks1 = y1
+                ks2 = y2
+            if s == 2:
+                ks1 = z1
+                ks2 = z2
+        
+            K[s] =  -6.7e-11*mass*(ks1- ks2)/R
+
+    # if R == 0:
+    #     K = np.zeros(3)
+    # else:
+    #     K = -Galaxy.G*mass*delta/R
+
+    # K = np.zeros(3) if R == 0 else -Galaxy.G*mass*delta/R
+    
+    return K
+
 class Galaxy:
     
     G: float = 6.7*1e-11
@@ -39,10 +127,10 @@ class Galaxy:
         PM = np.zeros((self.n, 3, self.timesteps))
         
         if rank == MASTER:
-            print(f"{Galaxy.M=}, {Galaxy.r=}, {self.n=}")
+            # print(f"{Galaxy.M=}, {Galaxy.r=}, {self.n=}")
             masses = Galaxy.M*np.random.rand(self.n)
             M1 = Galaxy.M*1e4
-            print(f"{M1}")
+            # print(f"{M1}")
             pos = Galaxy.r*np.random.rand(self.n, 3)
             # print(pos)
             pos[:, 0] = np.random.exponential(Galaxy.r, self.n)
@@ -80,19 +168,19 @@ class Galaxy:
             # position and velocity of the Sun
             pos[0, 0], pos[0, 1], pos[0, 2] = 0, 0, 0
             vel[0, 0], vel[0, 1], vel[0, 2], masses[0] = 0, 0, 0, M1
-            fig = plt.figure()
-            ax = fig.add_subplot(111, projection='3d')
-            ax.scatter(pos[:, 0], pos[:, 1], pos[:, 2])
-            ax.set_xlabel('X Label')
-            ax.set_ylabel('Y Label')
-            ax.set_zlabel('Z Label')
+            # fig = plt.figure()
+            # ax = fig.add_subplot(111, projection='3d')
+            # ax.scatter(pos[:, 0], pos[:, 1], pos[:, 2])
+            # ax.set_xlabel('X Label')
+            # ax.set_ylabel('Y Label')
+            # ax.set_zlabel('Z Label')
 
-            plt.show()
-            plt.savefig("asd.png")
-            fig = plt.figure()
-            plt.scatter(pos[:, 0], pos[:, 1])
-            plt.show()
-            plt.savefig("asd2d.png")        
+            # plt.show()
+            # plt.savefig("asd.png")
+            # fig = plt.figure()
+            # plt.scatter(pos[:, 0], pos[:, 1])
+            # plt.show()
+            # plt.savefig("asd2d.png")        
         else:
             pos, vel, masses = None, None, None
         
@@ -184,101 +272,14 @@ class Galaxy:
         comm.Recv([masses, N, MPI.DOUBLE], source=MASTER, tag=FROM_MASTER)
         
         for n in range(offset, offset+rows):
-            P[n, :], V[n, :] = self._runge_kutta(pos, vel, masses, n, N, h, Galaxy.r)
+            P[n, :], V[n, :] = runge_kutta(pos, vel, masses, n, N, h, Galaxy.r)
         
         comm.send(offset, dest=MASTER, tag=FROM_WORKER)
         comm.send(rows, dest=MASTER, tag=FROM_WORKER)
         comm.Send(P[offset:(offset+rows), :], dest=MASTER, tag=FROM_WORKER)
         comm.Send(V[offset:(offset+rows), :], dest=MASTER, tag=FROM_WORKER)
             
-    # @numba.njit()
-    def _runge_kutta(self, pos, vel, masses, n, N, h, r):
-        """Fourth order Runge Kutta equations"""
 
-        j = 0
-        
-        k1v_a, k2v_a = np.zeros((N, 3)), np.zeros((N, 3))
-        k3v_a, k4v_a = np.zeros((N, 3)), np.zeros((N, 3))
-        pos_n, vel_n = np.zeros(3), np.zeros(3)
-        
-        # Gravity softening factor
-        S = r*0.58*N**-0.26
-        
-        k1x, k1y, k1z = vel[n, 0], vel[n, 1], vel[n, 2]        
-        k1v_a = self._accelerate(k1v_a, j, n, pos, masses, N, h, 0, 0, 0, S)
-        k1vx, k1vy, k1vz = np.sum(k1v_a[:, 0]), np.sum(k1v_a[:, 1]), np.sum(k1v_a[:, 2])
-        
-        k2x, k2y, k2z = vel[n, 0] + 0.5*h*k1vx, vel[n, 1] + 0.5*h*k1vy, vel[n, 2] + 0.5*h*k1vz
-        k2v_a = self._accelerate(k2v_a, j, n, pos, masses, N, h/2, k1vx, k1vy, k1vz, S)
-        k2vx, k2vy, k2vz = np.sum(k2v_a[:, 0]), np.sum(k2v_a[:, 1]), np.sum(k2v_a[:, 2])
-
-        k3x, k3y, k3z = vel[n, 0] + 0.5*h*k2vx, vel[n, 1] + 0.5*h*k2vy, vel[n, 2] + 0.5*h*k2vz
-        k3v_a = self._accelerate(k3v_a, j, n, pos, masses, N, h/2, k2vx, k2vy, k2vz, S)
-        k3vx, k3vy, k3vz = np.sum(k3v_a[:, 0]), np.sum(k3v_a[:, 1]), np.sum(k3v_a[:, 2])
-
-        k4x, k4y, k4z = vel[n, 0] + h*k3vx, vel[n, 1] + h*k3vy, vel[n, 2] + h*k3vz
-        k4v_a = self._accelerate(k4v_a, j, n, pos, masses, N, h, k3vx, k3vy, k3vz, S)
-        k4vx, k4vy, k4vz = np.sum(k4v_a[:, 0]), np.sum(k4v_a[:, 1]), np.sum(k4v_a[:, 2])
-        
-        vel_n[0] = (h/6)*(k1vx + 2*k2vx + 2*k3vx + k4vx) + vel[n, 0]
-        vel_n[1] = (h/6)*(k1vy + 2*k2vy + 2*k3vy + k4vy) + vel[n, 1]
-        vel_n[2] = (h/6)*(k1vz + 2*k2vz + 2*k3vz + k4vz) + vel[n, 2]
-        
-        pos_n[0] = (h/6)*(k1x + 2*k2x + 2*k3x + k4x) + pos[n, 0]
-        pos_n[1] = (h/6)*(k1y + 2*k2y + 2*k3y + k4y) + pos[n, 1]
-        pos_n[2] = (h/6)*(k1z + 2*k2z + 2*k3z + k4z) + pos[n, 2]
-
-        return pos_n, vel_n
-
-
-    # @numba.njit()
-    def _accelerate(self, k, j, n, pos, masses, N, h, fx, fy, fz, S):
-        x, y, z = pos[n, 0], pos[n, 1], pos[n, 2]
-        
-        for j in range(0, N):
-            if j == n:
-                k[j, :] = 0
-            else:
-                k[j, :] = self._f2(x, y, z, pos[j, 0]+h*fx, pos[j, 1]+h*fy, pos[j, 2]+h*fz, masses[j], k[j, :], S)
-    
-        return k
-    
-    # @numba.njit()
-    def _f2(self, x1, y1, z1, x2, y2, z2, mass, K, S):
-
-        # dx = x1 - x2
-        # dy = y1 - y2
-        # dz = z1 - z2
-        # R = (dx**2 + dy**2 + dz**2 + S)**1.5
-        # delta = np.array([dx, dy, dz])
-        R = ((x1-x2)**2 + (y1-y2)**2 + (z1-z2)**2 + S )**(1.5)
-        ks1 = 0
-        ks2 = 0
-        s = 0
-        if R == 0:
-                K = np.zeros(3)
-        else:
-            for s in range(0,3):
-                if s == 0:
-                    ks1 = x1
-                    ks2 = x2
-                if s == 1:
-                    ks1 = y1
-                    ks2 = y2
-                if s == 2:
-                    ks1 = z1
-                    ks2 = z2
-            
-                K[s] =  -6.7e-11*mass*(ks1- ks2)/R
-
-        # if R == 0:
-        #     K = np.zeros(3)
-        # else:
-        #     K = -Galaxy.G*mass*delta/R
-
-        # K = np.zeros(3) if R == 0 else -Galaxy.G*mass*delta/R
-        
-        return K
     
 if __name__ == "__main__":
     N = int(sys.argv[1])
@@ -287,7 +288,8 @@ if __name__ == "__main__":
     data = np.asarray(galaxy.simulate())
 
     if rank == MASTER:
-
+        t1 = time.time()
+        print("Making video...")
         Writer = animation.writers['ffmpeg']
         writer = Writer(fps=15, metadata=dict(artist='Me'), bitrate=1800)
         K = 1
@@ -324,3 +326,4 @@ if __name__ == "__main__":
         line_ani = animation.FuncAnimation(fig, update_lines, int (timesteps/K), fargs=(data, lines), interval=1, blit=True)
         line_ani.save('gravity_sim.mp4', writer=writer) # add this in if you want a vid
         plt.show()
+        print(f"Video took {time.time() - t1}s to make.")
