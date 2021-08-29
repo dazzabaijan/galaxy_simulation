@@ -1,12 +1,13 @@
-from numpy.lib.utils import source
 from mpi4py import MPI
 from dataclasses import dataclass
 from tqdm import tqdm
 import matplotlib.pyplot as plt
+import matplotlib.animation as animation
+import mpl_toolkits.mplot3d.axes3d as p3
 import numpy as np
 import time
-
-
+import sys
+import numba
 comm = MPI.COMM_WORLD
 size = comm.Get_size()
 rank = comm.Get_rank()
@@ -18,11 +19,12 @@ FROM_WORKER = 2
 
 class Galaxy:
     
-    G = 6.7*1e-11
-    M = 2e29
-    r = 1e11
+    G: float = 6.7*1e-11
+    M: int = 2e29
+    r: int = 1e11
+    h: int = 2e3
     
-    def __init__(self, n, timesteps):
+    def __init__(self, n: int, timesteps: int):
         """
         Base Galaxy class
         
@@ -33,7 +35,7 @@ class Galaxy:
         self.n = n
         self.timesteps = timesteps
 
-    def _setup_parameters(self):
+    def simulate(self):
         PM = np.zeros((self.n, 3, self.timesteps))
         
         if rank == MASTER:
@@ -49,7 +51,7 @@ class Galaxy:
             vel = escape_vel*np.random.rand(self.n, 3)
             
             for i in range(0, self.n):
-                for j in range(0, self.n):
+                for j in range(0, 3):
                     pos[i, j] *= self._rando()
                     vel[i, j] *= self._rando()
             
@@ -72,69 +74,237 @@ class Galaxy:
                     vel[i, 0], vel[i, 1] = -vp*np.cos(theta), vp*np.sin(theta)
             
             # position and velocity of the Sun
-            pos[0, 0], pos[0, 1], pos[0, 2], vel[0, 0], vel[0, 1], vel[0, 2], masses[0] = 0,0,0,0,0,0,M1
+            pos[0, 0], pos[0, 1], pos[0, 2] = 0, 0, 0
+            vel[0, 0], vel[0, 1], vel[0, 2], masses[0] = 0, 0, 0, M1
         
-        return 
+        else:
+            pos, vel, masses = None, None, None
+        
+        # print(pos)
+        return self._time_evolve(pos, vel, masses, PM, self.n, Galaxy.h, self.timesteps)
     
-    def _time_evolve(self, pos, vel, masses, PM, n, h, timesteps):
+    def _time_evolve(self, pos, vel, masses, PM, N, h, timesteps):
         if rank == MASTER:
             for i in tqdm(range(0, timesteps)):
-                pos, vel = 
+                # print(i)
+                pos, vel = self._run_master(pos, vel, masses, N, h)
+                PM[:, 0, i], PM[:, 1, i], PM[:, 2, i] = pos[:, 0], pos[:, 1], pos[:, 2]
+            return PM
         
+        if rank > MASTER:
+            for i in tqdm(range(0, timesteps)):
+                self._run_worker(pos, vel, masses, N, h)
+                
     def _rando(self):
         return 1 if np.random.rand() < 0.5 else 1
     
-    def _run_master(self, pos, vel, masses, n, h):
-        # pos, vel = 
-        pass
+    def _run_master(self, pos, vel, masses, N, h):
+        # print("Running master....")
+        pos, vel = self._MPI_A(h, pos, vel, masses, N)
+        # print("Finish running master...")
+        return pos, vel
     
-    def _MPI_A(self, h, pos, vel, masses, n):
+    def _MPI_A(self, h, pos, vel, masses, N):
         NCA, NCB = 3, 3
         
-        P, V = np.zeros((N, NCA)), np.zeros((N, NCB))
+        P, V = np.zeros((N, NCA)), np.zeros((N, NCA))
         
         if size < 2:
-            print("Need at least two MPI tasks. Quitting...")
+            print("Need >= 2 MPI tasks. Quitting...")
             comm.Abort()
         
         num_workers = size - 1
-        ave_row = self.n//num_workers
+        ave_row = N//num_workers
         extra = N%num_workers
         offset = 0
-        
+        # print(f"{num_workers=}")
+        # print(f"{ave_row=}")
+        # print(f"{extra=}")
         for dest in range(1, num_workers+1):
             rows = ave_row
             if dest <= extra:
                 rows += 1
-            comm.send(offset, dest=dest, tag = FROM_MASTER)
+            # print(f"{dest=}")
+            comm.send(offset, dest=dest, tag=FROM_MASTER)
             comm.send(rows, dest=dest, tag=FROM_MASTER)
+            
+            # Delegate arrays for workers compute
             comm.Send(pos, dest=dest, tag=FROM_MASTER)
             comm.Send(vel, dest=dest, tag=FROM_MASTER)
             comm.Send(masses, dest=dest, tag=FROM_MASTER)
             offset += rows
+            # print(offset)
             
         for i in range(1, num_workers+1):
+            # print(f"{i=}")
             source = i
-            offset = comm.recv(source=source, tag=FROM_MASTER)
+            offset = comm.recv(source=source, tag=FROM_WORKER)
             rows = comm.recv(source=source, tag=FROM_WORKER)
+            # print(f"{offset=}")
+            # print(f"{rows=}")
+            # Receive arrays from workers once they finished
             comm.Recv([P[offset:, :], rows*NCB, MPI.DOUBLE], source=source, tag=FROM_WORKER)
             comm.Recv([V[offset:, :], rows*NCB, MPI.DOUBLE], source=source, tag=FROM_WORKER)
         
+        # print(P, V)
         return P, V
-    
-    def _run_worker(self, pos, vel, masses, n, h):
+
+
+    def _run_worker(self, pos, vel, masses, N, h):
         NCA = 3
-        P = np.zeros((self.n, NCA))
-        V = np.zeros((self.n, NCA))
+        P = np.zeros((N, NCA))
+        V = np.zeros((N, NCA))
         
-        masses = np.zeros(self.n)
-        pos = np.zeros((self.n, 3))
-        vel = np.zeros((self.n, 3))
+        masses = np.zeros(N)
+        pos = np.zeros((N, 3))
+        vel = np.zeros((N, 3))
         
         offset = comm.recv(source=MASTER, tag=FROM_MASTER)
         rows = comm.recv(source=MASTER, tag=FROM_MASTER)
-        comm.Recv([pos, self.n*NCA, MPI.DOUBLE], source=MASTER)
         
+        # Receive arrays from master
+        comm.Recv([pos, N*NCA, MPI.DOUBLE], source=MASTER, tag=FROM_MASTER)
+        comm.Recv([vel, N*NCA, MPI.DOUBLE], source=MASTER, tag=FROM_MASTER)
+        comm.Recv([masses, N, MPI.DOUBLE], source=MASTER, tag=FROM_MASTER)
         
+        for n in range(offset, offset+rows):
+            P[n, :], V[n, :] = self._runge_kutta(pos, vel, masses, n, N, h, Galaxy.r)
+        
+        comm.send(offset, dest=MASTER, tag=FROM_WORKER)
+        comm.send(rows, dest=MASTER, tag=FROM_WORKER)
+        comm.Send(P[offset:(offset+rows), :], dest=MASTER, tag=FROM_WORKER)
+        comm.Send(V[offset:(offset+rows), :], dest=MASTER, tag=FROM_WORKER)
+            
+    # @numba.njit()
+    def _runge_kutta(self, pos, vel, masses, n, N, h, r):
+        """Fourth order Runge Kutta equations"""
+
+        j = 0
+        
+        k1v_a, k2v_a = np.zeros((N, 3)), np.zeros((N, 3))
+        k3v_a, k4v_a = np.zeros((N, 3)), np.zeros((N, 3))
+        pos_n, vel_n = np.zeros(3), np.zeros(3)
+        
+        # Gravity softening factor
+        S = r*0.58*N**-0.26
+        
+        k1x, k1y, k1z = vel[n, 0], vel[n, 1], vel[n, 2]        
+        k1v_a = self._accelerate(k1v_a, j, n, pos, masses, N, h, 0, 0, 0, S)
+        k1vx, k1vy, k1vz = np.sum(k1v_a[:, 0]), np.sum(k1v_a[:, 1]), np.sum(k1v_a[:, 2])
+        
+        k2x, k2y, k2z = vel[n, 0] + 0.5*h*k1vx, vel[n, 1] + 0.5*h*k1vy, vel[n, 2] + 0.5*h*k1vz
+        k2v_a = self._accelerate(k2v_a, j, n, pos, masses, N, h/2, k1vx, k1vy, k1vz, S)
+        k2vx, k2vy, k2vz = np.sum(k2v_a[:, 0]), np.sum(k2v_a[:, 1]), np.sum(k2v_a[:, 2])
+
+        k3x, k3y, k3z = vel[n, 0] + 0.5*h*k2vx, vel[n, 1] + 0.5*h*k2vy, vel[n, 2] + 0.5*h*k2vz
+        k3v_a = self._accelerate(k3v_a, j, n, pos, masses, N, h/2, k2vx, k2vy, k2vz, S)
+        k3vx, k3vy, k3vz = np.sum(k3v_a[:, 0]), np.sum(k3v_a[:, 1]), np.sum(k3v_a[:, 2])
+
+        k4x, k4y, k4z = vel[n, 0] + h*k3vx, vel[n, 1] + h*k3vy, vel[n, 2] + h*k3vz
+        k4v_a = self._accelerate(k4v_a, j, n, pos, masses, N, h, k3vx, k3vy, k3vz, S)
+        k4vx, k4vy, k4vz = np.sum(k4v_a[:, 0]), np.sum(k4v_a[:, 1]), np.sum(k4v_a[:, 2])
+        
+        vel_n[0] = (h/6)*(k1vx + 2*k2vx + 2*k3vx + k4vx) + vel[n, 0]
+        vel_n[1] = (h/6)*(k1vy + 2*k2vy + 2*k3vy + k4vy) + vel[n, 1]
+        vel_n[2] = (h/6)*(k1vz + 2*k2vz + 2*k3vz + k4vz) + vel[n, 2]
+        
+        pos_n[0] = (h/6)*(k1x + 2*k2x + 2*k3x + k4x) + pos[n, 0]
+        pos_n[1] = (h/6)*(k1y + 2*k2y + 2*k3y + k4y) + pos[n, 1]
+        pos_n[2] = (h/6)*(k1z + 2*k2z + 2*k3z + k4z) + pos[n, 2]
+
+        return pos_n, vel_n
+
+
+    # @numba.njit()
+    def _accelerate(self, k, j, n, pos, masses, N, h, fx, fy, fz, S):
+        x, y, z = pos[n, 0], pos[n, 1], pos[n, 2]
+        
+        for j in range(0, N):
+            if j == n:
+                k[j, :] = 0
+            else:
+                k[j, :] = self._f2(x, y, z, pos[j, 0]+h*fx, pos[j, 1]+h*fy, pos[j, 2]+h*fz, masses[j], k[j, :], S)
+    
+        return k
+    
+    # @numba.njit()
+    def _f2(self, x1, y1, z1, x2, y2, z2, mass, K, S):
+
+        # dx = x1 - x2
+        # dy = y1 - y2
+        # dz = z1 - z2
+        # R = (dx**2 + dy**2 + dz**2 + S)**1.5
+        # delta = np.array([dx, dy, dz])
+        R = ((x1-x2)**2 + (y1-y2)**2 + (z1-z2)**2 + S )**(1.5)
+        ks1 = 0
+        ks2 = 0
+        s = 0
+        if R == 0:
+                K = np.zeros(3)
+        else:
+            for s in range(0,3):
+                if s == 0:
+                    ks1 = x1
+                    ks2 = x2
+                if s == 1:
+                    ks1 = y1
+                    ks2 = y2
+                if s == 2:
+                    ks1 = z1
+                    ks2 = z2
+            
+                K[s] =  -6.7e-11*mass*(ks1- ks2)/R
+
+        # if R == 0:
+        #     K = np.zeros(3)
+        # else:
+        #     K = -Galaxy.G*mass*delta/R
+
+        # K = np.zeros(3) if R == 0 else -Galaxy.G*mass*delta/R
+        
+        return K
+    
 if __name__ == "__main__":
-    pass
+    N = int(sys.argv[1])
+    timesteps = 250
+    galaxy = Galaxy(N, timesteps)
+    data = np.asarray(galaxy.simulate())
+
+    if rank == MASTER:
+
+        Writer = animation.writers['ffmpeg']
+        writer = Writer(fps=15, metadata=dict(artist='Me'), bitrate=1800)
+        K = 1
+        B = np.zeros((N,3,int(timesteps/K)))
+        
+        for i in range (0,int(timesteps/K)):
+            B[:,:,i] = data[:,:,K*i]
+
+        def update_lines(num, dataLines, lines):
+            for line, data in zip(lines, dataLines):
+                # NOTE: there is no .set_data() for 3 dim data...
+                line.set_data(data[0:2, (num-1):num])
+                line.set_3d_properties(data[2, (num-1):num])
+            return lines
+    
+        # Attaching 3D axis to the figure
+        fig = plt.figure()
+        ax = p3.Axes3D(fig)
+        
+        data = [B[i] for i in np.arange(N)]
+        
+        # NOTE: Can't pass empty arrays into 3d version of plot()
+        lines = [ax.plot(dat[0, 0:1], dat[1, 0:1], dat[2, 0:1], marker = 'o', markersize = 0.5, color = 'w', alpha = 1)[0] for dat in data]
+        
+        # Setting the axes properties
+        lim = 2*Galaxy.r
+        
+        ax.set_xlim3d([-lim, lim])
+        ax.set_ylim3d([-lim, lim])
+        ax.set_zlim3d([-lim, lim])
+        ax.set_facecolor('xkcd:black')
+        ax.set_axis_off()
+        # Creating the Animation object
+        line_ani = animation.FuncAnimation(fig, update_lines, int (timesteps/K), fargs=(data, lines), interval=1, blit=True)
+        line_ani.save('gravity_sim.mp4', writer=writer) # add this in if you want a vid
+        plt.show()
