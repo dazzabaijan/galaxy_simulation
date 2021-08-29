@@ -8,6 +8,8 @@ import numpy as np
 import time
 import sys
 import numba
+
+
 comm = MPI.COMM_WORLD
 size = comm.Get_size()
 rank = comm.Get_rank()
@@ -89,16 +91,12 @@ def f(x1, y1, z1, x2, y2, z2, mass, K, S):
         
     #         K[s] =  -6.7e-11*mass*(ks1- ks2)/R
     
-    # if R == 0:
-    #     K = np.zeros(3)
-    # else:
-    #     K = -G*mass*delta/R
-    
     delta = np.array([(x1 - x2), (y1 - y2), (z1 - z2)])
     R = (delta@delta + S)**1.5
     K = np.zeros(3) if R == 0 else -G*mass*delta/R
     
     return K
+
 
 class Galaxy:
     
@@ -179,22 +177,21 @@ class Galaxy:
             pos, vel, masses = None, None, None
         
         # print(pos)
-        return self._time_evolve(pos, vel, masses, PM, self.n, Galaxy.h, self.timesteps)
+        return self._time_evolve(pos, vel, masses, PM, self.n, Galaxy.h)
     
-    def _time_evolve(self, pos, vel, masses, PM, N, h, timesteps):
+    def _time_evolve(self, pos, vel, masses, PM, N, h):
         if rank == MASTER:
-            for i in tqdm(range(0, timesteps)):
-                # print(i)
+            for i in tqdm(range(0, self.timesteps)):
+
                 pos, vel = self._run_master(pos, vel, masses, N, h)
                 PM[:, 0, i], PM[:, 1, i], PM[:, 2, i] = pos[:, 0], pos[:, 1], pos[:, 2]
+
             return PM
         
         if rank > MASTER:
-            for i in tqdm(range(0, timesteps)):
+            for i in tqdm(range(0, self.timesteps)):
                 self._run_worker(pos, vel, masses, N, h)
-                
-    def _rando(self):
-        return 1 if np.random.rand() < 0.5 else -1
+
     
     def _run_master(self, pos, vel, masses, N, h):
         
@@ -267,7 +264,9 @@ class Galaxy:
         comm.send(rows, dest=MASTER, tag=FROM_WORKER)
         comm.Send(P[offset:(offset+rows), :], dest=MASTER, tag=FROM_WORKER)
         comm.Send(V[offset:(offset+rows), :], dest=MASTER, tag=FROM_WORKER)
-            
+    
+    def _rando(self):
+        return 1 if np.random.rand() < 0.5 else -1            
 
     
 if __name__ == "__main__":
