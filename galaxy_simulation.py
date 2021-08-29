@@ -20,8 +20,6 @@ G: int = 6.7e-11
 @numba.njit()
 def runge_kutta(pos, vel, masses, n, N, h, r):
     """Fourth order Runge Kutta equations"""
-
-    j = 0
     
     k1v_a, k2v_a = np.zeros((N, 3)), np.zeros((N, 3))
     k3v_a, k4v_a = np.zeros((N, 3)), np.zeros((N, 3))
@@ -31,19 +29,19 @@ def runge_kutta(pos, vel, masses, n, N, h, r):
     S = r*0.58*N**-0.26
     
     k1x, k1y, k1z = vel[n, 0], vel[n, 1], vel[n, 2]        
-    k1v_a = accelerate(k1v_a, j, n, pos, masses, N, h, 0, 0, 0, S)
+    k1v_a = accelerate(k1v_a, n, pos, masses, N, h, 0, 0, 0, S)
     k1vx, k1vy, k1vz = np.sum(k1v_a[:, 0]), np.sum(k1v_a[:, 1]), np.sum(k1v_a[:, 2])
     
     k2x, k2y, k2z = vel[n, 0] + 0.5*h*k1vx, vel[n, 1] + 0.5*h*k1vy, vel[n, 2] + 0.5*h*k1vz
-    k2v_a = accelerate(k2v_a, j, n, pos, masses, N, h/2, k1vx, k1vy, k1vz, S)
+    k2v_a = accelerate(k2v_a, n, pos, masses, N, h/2, k1vx, k1vy, k1vz, S)
     k2vx, k2vy, k2vz = np.sum(k2v_a[:, 0]), np.sum(k2v_a[:, 1]), np.sum(k2v_a[:, 2])
 
     k3x, k3y, k3z = vel[n, 0] + 0.5*h*k2vx, vel[n, 1] + 0.5*h*k2vy, vel[n, 2] + 0.5*h*k2vz
-    k3v_a = accelerate(k3v_a, j, n, pos, masses, N, h/2, k2vx, k2vy, k2vz, S)
+    k3v_a = accelerate(k3v_a, n, pos, masses, N, h/2, k2vx, k2vy, k2vz, S)
     k3vx, k3vy, k3vz = np.sum(k3v_a[:, 0]), np.sum(k3v_a[:, 1]), np.sum(k3v_a[:, 2])
 
     k4x, k4y, k4z = vel[n, 0] + h*k3vx, vel[n, 1] + h*k3vy, vel[n, 2] + h*k3vz
-    k4v_a = accelerate(k4v_a, j, n, pos, masses, N, h, k3vx, k3vy, k3vz, S)
+    k4v_a = accelerate(k4v_a, n, pos, masses, N, h, k3vx, k3vy, k3vz, S)
     k4vx, k4vy, k4vz = np.sum(k4v_a[:, 0]), np.sum(k4v_a[:, 1]), np.sum(k4v_a[:, 2])
     
     vel_n[0] = (h/6)*(k1vx + 2*k2vx + 2*k3vx + k4vx) + vel[n, 0]
@@ -57,19 +55,19 @@ def runge_kutta(pos, vel, masses, n, N, h, r):
     return pos_n, vel_n
 
 @numba.njit()
-def accelerate(k, j, n, pos, masses, N, h, fx, fy, fz, S):
+def accelerate(k, n, pos, masses, N, h, fx, fy, fz, S):
     x, y, z = pos[n, 0], pos[n, 1], pos[n, 2]
     
     for j in range(0, N):
         if j == n:
             k[j, :] = 0
         else:
-            k[j, :] = f2(x, y, z, pos[j, 0]+h*fx, pos[j, 1]+h*fy, pos[j, 2]+h*fz, masses[j], k[j, :], S)
+            k[j, :] = f(x, y, z, pos[j, 0]+h*fx, pos[j, 1]+h*fy, pos[j, 2]+h*fz, masses[j], k[j, :], S)
 
     return k
 
 @numba.njit()
-def f2(x1, y1, z1, x2, y2, z2, mass, K, S):
+def f(x1, y1, z1, x2, y2, z2, mass, K, S):
 
     # R = ((x1-x2)**2 + (y1-y2)**2 + (z1-z2)**2 + S )**(1.5)
     # ks1 = 0
@@ -90,18 +88,14 @@ def f2(x1, y1, z1, x2, y2, z2, mass, K, S):
     #             ks2 = z2
         
     #         K[s] =  -6.7e-11*mass*(ks1- ks2)/R
-
-    dx = x1 - x2
-    dy = y1 - y2
-    dz = z1 - z2
-    R = (dx**2 + dy**2 + dz**2 + S)**1.5
-    delta = np.array([dx, dy, dz])
-
+    
     # if R == 0:
     #     K = np.zeros(3)
     # else:
     #     K = -G*mass*delta/R
-
+    
+    delta = np.array([(x1 - x2), (y1 - y2), (z1 - z2)])
+    R = (delta@delta + S)**1.5
     K = np.zeros(3) if R == 0 else -G*mass*delta/R
     
     return K
