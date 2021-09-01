@@ -1,3 +1,4 @@
+from os import PRIO_PROCESS
 from mpi4py import MPI
 from dataclasses import dataclass
 from tqdm import tqdm
@@ -184,46 +185,69 @@ class Galaxy:
         if rank == MASTER:
             for k in range(0, self.timesteps):
                 
-                NCA, NCB = 3, 3
-        
-                P, V = np.zeros((N, NCA)), np.zeros((N, NCA))
+                P, V = np.zeros((N, 3)), np.zeros((N, 3))
                 
                 if size < 2:
                     print("Need >= 2 MPI tasks. Quitting...")
                     comm.Abort()
                 
                 num_workers = size - 1
-                ave_row = N//num_workers
-                extra = N%num_workers
+                ave_row = N//size
+                extra = N%size
                 offset = 0
-                print(f"MASTER: {num_workers=}")
-                print(f"MASTER: {ave_row=}")
-                print(f"MASTER: {extra=}")
-                for dest in range(1, num_workers+1):
-                    rows = ave_row
-                    if dest <= extra:
-                        rows += 1
+                if k == 0:
+                    print(f"MASTER: {num_workers=}")
+                    print(f"MASTER: {ave_row=}")
+                    print(f"MASTER: {extra=}")
+                chunksizes = []
+                istarts = []
+                istart = 0
+                for _ in range(0, size):
+                    if extra > 0:
+                        chunksize = ave_row + 1
+                    else:
+                        chunksize = ave_row
+                    chunksizes.append(chunksize)
+                    istarts.append(istart)
+                    istart += chunksize
+                    extra -= 1
+                
+                    
+                for dest in range(1, size):
+                    # rows = ave_row
+                    # offset += rows
+                    # if dest <= extra:
+                    #     rows += 1
+                    
                     # print(f"{dest=}")
-                    comm.send(offset, dest=dest, tag=FROM_MASTER)
-                    comm.send(rows, dest=dest, tag=FROM_MASTER)
+                    comm.send(istarts[dest], dest=dest, tag=FROM_MASTER)
+                    comm.send(chunksizes[dest], dest=dest, tag=FROM_MASTER)
                     
                     # Delegate arrays for workers compute
                     comm.Send(pos, dest=dest, tag=FROM_MASTER)
                     comm.Send(vel, dest=dest, tag=FROM_MASTER)
                     comm.Send(masses, dest=dest, tag=FROM_MASTER)
-                    offset += rows
+                
                     # print(offset)
+                # print(f"\nMaster {rank} : \n {pos=}, \n {vel=}")
+                for n in range(istarts[0], istarts[0]+chunksizes[0]):
+                    P[n, :], V[n, :] = runge_kutta(pos, vel, masses, n, N, h, Galaxy.r)
                     
-                for i in range(1, num_workers+1):
+                    # print(f"\nMaster {rank} : \n P[{n}, :] = {P[n, :]}")
+                    # print(f"P = {P}")
+            
+                for i in range(1, size):
                     # print(f"{i=}")
                     offset = comm.recv(source=i, tag=FROM_WORKER)
                     rows = comm.recv(source=i, tag=FROM_WORKER)
-                    # print(f"{offset=}")
-                    # print(f"{rows=}")
+                    
+                    # print(f"\nWorker {i}: {offset=}, {rows=}")
+                    
                     # Receive arrays from workers once they finished
-                    comm.Recv([P[offset:, :], rows*NCB, MPI.DOUBLE], source=i, tag=FROM_WORKER)
-                    comm.Recv([V[offset:, :], rows*NCB, MPI.DOUBLE], source=i, tag=FROM_WORKER)
-                    # print(f"MASTER: {P[offset:, :]=}")
+                    comm.Recv([P[offset:, :], rows*3, MPI.DOUBLE], source=i, tag=FROM_WORKER)
+                    comm.Recv([V[offset:, :], rows*3, MPI.DOUBLE], source=i, tag=FROM_WORKER)
+                    
+                    # print(f"\n Master\nReceived P[{offset}:, :] = \n{P[offset:, :]}")
                 
                 # print(P, V)
                 # return P, V
@@ -235,105 +259,111 @@ class Galaxy:
                
             return PM
         
-        if rank > MASTER:
+        if rank != MASTER:
             for i in range(0, self.timesteps):
                 # self._run_worker(pos, vel, masses, N, h)
-                NCA = 3
-                P = np.zeros((N, NCA))
-                V = np.zeros((N, NCA))
+                P = np.zeros((N, 3))
+                V = np.zeros((N, 3))
                 
-                masses = np.zeros(N)
                 pos = np.zeros((N, 3))
                 vel = np.zeros((N, 3))
+                masses = np.zeros(N)
+                extra = N%size
                 
                 offset = comm.recv(source=MASTER, tag=FROM_MASTER)
                 rows = comm.recv(source=MASTER, tag=FROM_MASTER)
-                print(f"worker {rank} : \n {offset=}, {rows=}")
+                # print(f"worker {rank} : \n {offset=}, {rows=}")
                 # Receive arrays from master
-                comm.Recv([pos, N*NCA, MPI.DOUBLE], source=MASTER, tag=FROM_MASTER)
-                comm.Recv([vel, N*NCA, MPI.DOUBLE], source=MASTER, tag=FROM_MASTER)
+                comm.Recv([pos, N*3, MPI.DOUBLE], source=MASTER, tag=FROM_MASTER)
+                comm.Recv([vel, N*3, MPI.DOUBLE], source=MASTER, tag=FROM_MASTER)
                 comm.Recv([masses, N, MPI.DOUBLE], source=MASTER, tag=FROM_MASTER)
-                print(f"\nworker {rank} : \n {pos=}, \n {vel=}")
+                # print(f"\nworker {rank} : \n {pos=}, \n {vel=}")
                 for n in range(offset, offset+rows):
                     P[n, :], V[n, :] = runge_kutta(pos, vel, masses, n, N, h, Galaxy.r)
-                    print(f"\nworker {rank} : \n P[{n}, :] = {P[n, :]}")
+                    
+                    # print(f"\nworker {rank} : \n P[{n}, :] = {P[n, :]}")
+                    # print(f"P = {P}")
+                    
                 comm.send(offset, dest=MASTER, tag=FROM_WORKER)
                 comm.send(rows, dest=MASTER, tag=FROM_WORKER)
                 comm.Send(P[offset:(offset+rows), :], dest=MASTER, tag=FROM_WORKER)
+                
+                # print(f"\nWorker {rank}\nSent P[{offset}:({offset+rows}), :] = \n{P[offset:(offset+rows), :]}")
+                
                 comm.Send(V[offset:(offset+rows), :], dest=MASTER, tag=FROM_WORKER)
 
     
-    # def _run_master(self, pos, vel, masses, N, h):
+    def _run_master(self, pos, vel, masses, N, h):
         
-    #     NCA, NCB = 3, 3
+        NCA, NCB = 3, 3
         
-    #     P, V = np.zeros((N, NCA)), np.zeros((N, NCA))
+        P, V = np.zeros((N, NCA)), np.zeros((N, NCA))
         
-    #     if size < 2:
-    #         print("Need >= 2 MPI tasks. Quitting...")
-    #         comm.Abort()
+        if size < 2:
+            print("Need >= 2 MPI tasks. Quitting...")
+            comm.Abort()
         
-    #     num_workers = size - 1
-    #     ave_row = N//num_workers
-    #     extra = N%num_workers
-    #     offset = 0
-    #     print(f"MASTER: {num_workers=}")
-    #     print(f"MASTER: {ave_row=}")
-    #     print(f"MASTER: {extra=}")
-    #     for dest in range(1, num_workers+1):
-    #         rows = ave_row
-    #         if dest <= extra:
-    #             rows += 1
-    #         # print(f"{dest=}")
-    #         comm.send(offset, dest=dest, tag=FROM_MASTER)
-    #         comm.send(rows, dest=dest, tag=FROM_MASTER)
+        num_workers = size - 1
+        ave_row = N//num_workers
+        extra = N%num_workers
+        offset = 0
+        print(f"MASTER: {num_workers=}")
+        print(f"MASTER: {ave_row=}")
+        print(f"MASTER: {extra=}")
+        for dest in range(1, num_workers+1):
+            rows = ave_row
+            if dest <= extra:
+                rows += 1
+            # print(f"{dest=}")
+            comm.send(offset, dest=dest, tag=FROM_MASTER)
+            comm.send(rows, dest=dest, tag=FROM_MASTER)
             
-    #         # Delegate arrays for workers compute
-    #         comm.Send(pos, dest=dest, tag=FROM_MASTER)
-    #         comm.Send(vel, dest=dest, tag=FROM_MASTER)
-    #         comm.Send(masses, dest=dest, tag=FROM_MASTER)
-    #         offset += rows
-    #         # print(offset)
+            # Delegate arrays for workers compute
+            comm.Send(pos, dest=dest, tag=FROM_MASTER)
+            comm.Send(vel, dest=dest, tag=FROM_MASTER)
+            comm.Send(masses, dest=dest, tag=FROM_MASTER)
+            offset += rows
+            # print(offset)
             
-    #     for i in range(1, num_workers+1):
-    #         # print(f"{i=}")
-    #         offset = comm.recv(source=i, tag=FROM_WORKER)
-    #         rows = comm.recv(source=i, tag=FROM_WORKER)
-    #         # print(f"{offset=}")
-    #         # print(f"{rows=}")
-    #         # Receive arrays from workers once they finished
-    #         comm.Recv([P[offset:, :], rows*NCB, MPI.DOUBLE], source=i, tag=FROM_WORKER)
-    #         comm.Recv([V[offset:, :], rows*NCB, MPI.DOUBLE], source=i, tag=FROM_WORKER)
-    #         # print(f"MASTER: {P[offset:, :]=}")
+        for i in range(1, num_workers+1):
+            # print(f"{i=}")
+            offset = comm.recv(source=i, tag=FROM_WORKER)
+            rows = comm.recv(source=i, tag=FROM_WORKER)
+            # print(f"{offset=}")
+            # print(f"{rows=}")
+            # Receive arrays from workers once they finished
+            comm.Recv([P[offset:, :], rows*NCB, MPI.DOUBLE], source=i, tag=FROM_WORKER)
+            comm.Recv([V[offset:, :], rows*NCB, MPI.DOUBLE], source=i, tag=FROM_WORKER)
+            # print(f"MASTER: {P[offset:, :]=}")
         
-    #     # print(P, V)
-    #     return P, V
+        # print(P, V)
+        return P, V
 
 
-    # def _run_worker(self, pos, vel, masses, N, h):
-    #     NCA = 3
-    #     P = np.zeros((N, NCA))
-    #     V = np.zeros((N, NCA))
+    def _run_worker(self, pos, vel, masses, N, h):
+        NCA = 3
+        P = np.zeros((N, NCA))
+        V = np.zeros((N, NCA))
         
-    #     masses = np.zeros(N)
-    #     pos = np.zeros((N, 3))
-    #     vel = np.zeros((N, 3))
+        masses = np.zeros(N)
+        pos = np.zeros((N, 3))
+        vel = np.zeros((N, 3))
         
-    #     offset = comm.recv(source=MASTER, tag=FROM_MASTER)
-    #     rows = comm.recv(source=MASTER, tag=FROM_MASTER)
-    #     print(f"worker {rank} : \n {offset=}, {rows=}")
-    #     # Receive arrays from master
-    #     comm.Recv([pos, N*NCA, MPI.DOUBLE], source=MASTER, tag=FROM_MASTER)
-    #     comm.Recv([vel, N*NCA, MPI.DOUBLE], source=MASTER, tag=FROM_MASTER)
-    #     comm.Recv([masses, N, MPI.DOUBLE], source=MASTER, tag=FROM_MASTER)
-    #     print(f"\nworker {rank} : \n {pos=}, \n {vel=}")
-    #     for n in range(offset, offset+rows):
-    #         P[n, :], V[n, :] = runge_kutta(pos, vel, masses, n, N, h, Galaxy.r)
-    #         print(f"\nworker {rank} : \n P[{n}, :] = {P[n, :]}")
-    #     comm.send(offset, dest=MASTER, tag=FROM_WORKER)
-    #     comm.send(rows, dest=MASTER, tag=FROM_WORKER)
-    #     comm.Send(P[offset:(offset+rows), :], dest=MASTER, tag=FROM_WORKER)
-    #     comm.Send(V[offset:(offset+rows), :], dest=MASTER, tag=FROM_WORKER)
+        offset = comm.recv(source=MASTER, tag=FROM_MASTER)
+        rows = comm.recv(source=MASTER, tag=FROM_MASTER)
+        print(f"worker {rank} : \n {offset=}, {rows=}")
+        # Receive arrays from master
+        comm.Recv([pos, N*NCA, MPI.DOUBLE], source=MASTER, tag=FROM_MASTER)
+        comm.Recv([vel, N*NCA, MPI.DOUBLE], source=MASTER, tag=FROM_MASTER)
+        comm.Recv([masses, N, MPI.DOUBLE], source=MASTER, tag=FROM_MASTER)
+        print(f"\nworker {rank} : \n {pos=}, \n {vel=}")
+        for n in range(offset, offset+rows):
+            P[n, :], V[n, :] = runge_kutta(pos, vel, masses, n, N, h, Galaxy.r)
+            print(f"\nworker {rank} : \n P[{n}, :] = {P[n, :]}")
+        comm.send(offset, dest=MASTER, tag=FROM_WORKER)
+        comm.send(rows, dest=MASTER, tag=FROM_WORKER)
+        comm.Send(P[offset:(offset+rows), :], dest=MASTER, tag=FROM_WORKER)
+        comm.Send(V[offset:(offset+rows), :], dest=MASTER, tag=FROM_WORKER)
     
     def _rando(self):
         return 1 if np.random.rand() < 0.5 else -1            
@@ -341,9 +371,11 @@ class Galaxy:
     
 if __name__ == "__main__":
     N = int(sys.argv[1])
-    timesteps = 2
+    timesteps = 500
+    t0 = time.time()
     galaxy = Galaxy(N, timesteps)
     data = np.asarray(galaxy.simulate())
+    print(f"Simulation took {time.time() - t0}s to run.")
 
     if rank == MASTER:
         t1 = time.time()
